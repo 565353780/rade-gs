@@ -45,34 +45,41 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
     depth_list = []
     color_list = []
     alpha_thres = 0.5
-    for viewpoint_cam in viewpoint_cam_list:
+
+    print('[INFO][mesh_extract::extract_mesh]')
+    print('\t start render depth...')
+    for viewpoint_cam in tqdm(viewpoint_cam_list):
         # Rendering offscreen from that camera 
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        rendered_img = torch.clamp(render_pkg["render"], min=0, max=1.0).cpu().numpy()
+        rendered_img = np.asarray(torch.clamp(render_pkg["render"], min=0, max=1.0).permute(1, 2, 0).cpu().numpy(), order="C")
         color_list.append(rendered_img)
         depth = render_pkg["middepth"].clone()
         if viewpoint_cam.gt_mask is not None:
             depth[(viewpoint_cam.gt_mask < 0.5)] = 0
         depth[render_pkg["mask"]<alpha_thres] = 0
-        depth_list.append(depth[0].cpu().numpy())
+        depth_list.append(np.asarray(depth.permute(1, 2, 0).cpu().numpy(), order="C"))
 
     torch.cuda.empty_cache()
     voxel_size = 0.002
+    voxel_size = 0.01
     o3d_device = o3d.core.Device("CPU:0")
-    vbg = o3d.t.geometry.VoxelBlockGrid(attr_names=('tsdf', 'weight'),
+    vbg = o3d.t.geometry.VoxelBlockGrid(attr_names=('tsdf', 'weight', 'color'),
                                             attr_dtypes=(o3c.float32,
+                                                         o3c.float32,
                                                          o3c.float32),
-                                            attr_channels=((1), (1)),
+                                        attr_channels=((1), (1), (3)),
                                             voxel_size=voxel_size,
                                             block_resolution=16,
                                             block_count=50000,
                                             device=o3d_device)
 
     print('[INFO][mesh_extract::extract_mesh]')
-    print('\t start render depth and integrate...')
+    print('\t start integrate depth...')
     pbar = tqdm(total=len(color_list))
     for color, depth, viewpoint_cam in zip(color_list, depth_list, viewpoint_cam_list):
         # depth = o3d.cuda.pybind.t.geometry.Image(depth)
+        color = o3d.t.geometry.Image(color)
+        color = color.to(o3d_device)
         depth = o3d.t.geometry.Image(depth)
         depth = depth.to(o3d_device)
         W, H = viewpoint_cam.image_width, viewpoint_cam.image_height
@@ -90,12 +97,14 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
             1.0, 8.0
             )
         vbg.integrate(
-                        frustum_block_coords, 
-                        depth, 
-                        intrinsic,
-                        extrinsic,  
-                        1.0, 8.0
-                    )
+            frustum_block_coords, 
+            depth,
+            color,
+            intrinsic,
+            intrinsic,
+            extrinsic,  
+            1.0, 8.0
+            )
 
         pbar.update(1)
 
