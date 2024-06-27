@@ -13,3 +13,9 @@ rm -rf install
 
 cmake -Bbuild . -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build -j --target install
+
+cd ../submodules/diff-gaussian-rasterization
+pip install -e .
+
+cd ../simple-knn
+pip install -e .
