@@ -2,6 +2,7 @@ import os
 import torch
 from random import randint
 import sys
+from tqdm import tqdm
 from scene import Scene, GaussianModel
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
@@ -66,6 +67,10 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
                                             block_resolution=16,
                                             block_count=50000,
                                             device=o3d_device)
+
+    print('[INFO][mesh_extract::extract_mesh]')
+    print('\t start render depth and integrate...')
+    pbar = tqdm(total=len(color_list))
     for color, depth, viewpoint_cam in zip(color_list, depth_list, viewpoint_cam_list):
         # depth = o3d.cuda.pybind.t.geometry.Image(depth)
         depth = o3d.t.geometry.Image(depth)
@@ -91,6 +96,8 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
                         extrinsic,  
                         1.0, 8.0
                     )
+
+        pbar.update(1)
 
     mesh = vbg.extract_triangle_mesh()
     mesh.compute_vertex_normals()
