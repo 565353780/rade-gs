@@ -4,7 +4,7 @@ sudo apt install -y libglew-dev libassimp-dev libboost-all-dev libgtk-3-dev libo
 pip install -U torch torchvision torchaudio
 
 pip install -U open3d trimesh scikit-image opencv-python \
-	plyfile tqdm
+	plyfile tqdm tensorboard
 
 cd ./SIBR_viewers
 
