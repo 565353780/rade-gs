@@ -1,20 +1,17 @@
 import os
 import torch
-from random import randint
 import sys
 from tqdm import tqdm
-from scene import Scene, GaussianModel
-from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
-import matplotlib.pyplot as plt
+from scene import GaussianModel
+from argparse import ArgumentParser
+from arguments import ModelParams, PipelineParams
 import math
 import numpy as np
-from scene.cameras import Camera
 from gaussian_renderer import render
 import open3d as o3d
 import open3d.core as o3c
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+from utils.camera_utils import cameraList_from_camInfos
 
 
 
@@ -36,8 +33,8 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
 
     gaussians.load_ply(output_path)
     print(f'Loaded gaussians from {output_path}')
-    
-    
+
+
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     viewpoint_cam_list = load_camera_colmap(dataset)
@@ -121,7 +118,3 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     with torch.no_grad():
         extract_mesh(lp.extract(args), pp.extract(args), args.checkpoint_iterations)
-        
-        
-    
-    
