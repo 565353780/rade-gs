@@ -299,7 +299,7 @@ if __name__ == "__main__":
     safe_state(args.quiet)
 
     # Start GUI server, configure and run training
-    # network_gui.init(args.ip, args.port)
+    network_gui.init(args.ip, args.port)
     # torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(dataset=lp.extract(args), 
              opt=op.extract(args), 
