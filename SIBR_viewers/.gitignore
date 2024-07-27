@@ -1,4 +1,5 @@
 build/
+subbuild/
 install/
 cmake-gui.exe.stackdump
 __pycache__/
