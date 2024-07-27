@@ -12,3 +12,5 @@ utils/__pycache__
 *.egg-info
 debug*
 dtu_eval/Offical_DTU_Dataset
+snapshot_fw.dump
+snapshot_bw.dump

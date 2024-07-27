@@ -1,10 +1,11 @@
 import os
 import torch
+from random import randint
 import sys
 from tqdm import tqdm
 from scene import GaussianModel
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams
+from arguments import ModelParams, PipelineParams, OptimizationParams
 import math
 import numpy as np
 from gaussian_renderer import render
@@ -15,8 +16,12 @@ from utils.camera_utils import cameraList_from_camInfos
 
 
 
-def load_camera_colmap(args):
-    scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
+def load_camera(args):
+    if os.path.exists(os.path.join(args.source_path, "sparse")):
+        scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
+    elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
+        print("Found transforms_train.json file, assuming Blender data set!")
+        scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
     return cameraList_from_camInfos(scene_info.train_cameras, 1.0, args)
 
 
@@ -35,9 +40,10 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
     print(f'Loaded gaussians from {output_path}')
 
 
+    kernel_size = dataset.kernel_size
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    viewpoint_cam_list = load_camera_colmap(dataset)
+    viewpoint_cam_list = load_camera(dataset)
 
     depth_list = []
     color_list = []
@@ -47,14 +53,14 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
     print('\t start render depth...')
     for viewpoint_cam in tqdm(viewpoint_cam_list):
         # Rendering offscreen from that camera 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        rendered_img = np.asarray(torch.clamp(render_pkg["render"], min=0, max=1.0).permute(1, 2, 0).cpu().numpy(), order="C")
-        color_list.append(rendered_img)
-        depth = render_pkg["middepth"].clone()
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, kernel_size)
+        rendered_img = torch.clamp(render_pkg["render"], min=0, max=1.0).cpu().numpy().transpose(1,2,0)
+        color_list.append(np.ascontiguousarray(rendered_img))
+        depth = render_pkg["median_depth"].clone()
         if viewpoint_cam.gt_mask is not None:
             depth[(viewpoint_cam.gt_mask < 0.5)] = 0
         depth[render_pkg["mask"]<alpha_thres] = 0
-        depth_list.append(np.asarray(depth.permute(1, 2, 0).cpu().numpy(), order="C"))
+        depth_list.append(depth[0].cpu().numpy())
 
     torch.cuda.empty_cache()
     voxel_size = 0.002
@@ -64,7 +70,7 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
                                             attr_dtypes=(o3c.float32,
                                                          o3c.float32,
                                                          o3c.float32),
-                                        attr_channels=((1), (1), (3)),
+                                            attr_channels=((1), (1), (3)),
                                             voxel_size=voxel_size,
                                             block_resolution=16,
                                             block_count=50000,
@@ -74,36 +80,30 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
     print('\t start integrate depth...')
     pbar = tqdm(total=len(color_list))
     for color, depth, viewpoint_cam in zip(color_list, depth_list, viewpoint_cam_list):
-        # depth = o3d.cuda.pybind.t.geometry.Image(depth)
-        color = o3d.t.geometry.Image(color)
-        color = color.to(o3d_device)
         depth = o3d.t.geometry.Image(depth)
         depth = depth.to(o3d_device)
+        color = o3d.t.geometry.Image(color)
+        color = color.to(o3d_device)
         W, H = viewpoint_cam.image_width, viewpoint_cam.image_height
         fx = W / (2 * math.tan(viewpoint_cam.FoVx / 2.))
         fy = H / (2 * math.tan(viewpoint_cam.FoVy / 2.))
         intrinsic = np.array([[fx,0,float(W)/2],[0,fy,float(H)/2],[0,0,1]],dtype=np.float64)
-        # intrinsic = o3d.cuda.pybind.core.Tensor(intrinsic)
-        # extrinsic = o3d.cuda.pybind.core.Tensor(viewpoint_cam.extrinsic.cpu().numpy().astype(np.float64))
         intrinsic = o3d.core.Tensor(intrinsic)
-        extrinsic = o3d.core.Tensor(viewpoint_cam.extrinsic.cpu().numpy().astype(np.float64))
+        extrinsic = o3d.core.Tensor((viewpoint_cam.world_view_transform.T).cpu().numpy().astype(np.float64))
         frustum_block_coords = vbg.compute_unique_block_coordinates(
-            depth, 
-            intrinsic,
-            extrinsic, 
-            1.0, 8.0
-            )
+                                                                        depth, 
+                                                                        intrinsic,
+                                                                        extrinsic, 
+                                                                        1.0, 8.0
+                                                                    )
         vbg.integrate(
-            frustum_block_coords, 
-            depth,
-            color,
-            intrinsic,
-            intrinsic,
-            extrinsic,  
-            1.0, 8.0
-            )
-
-        pbar.update(1)
+                        frustum_block_coords, 
+                        depth, 
+                        color,
+                        intrinsic,
+                        extrinsic,  
+                        1.0, 8.0
+                    )
 
     mesh = vbg.extract_triangle_mesh()
     mesh.compute_vertex_normals()
