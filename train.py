@@ -30,8 +30,6 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 from scene.cameras import Camera
-import matplotlib.pyplot as plt
-from utils.vis_utils import apply_depth_colormap
 
 # function L1_loss_appearance is fork from GOF https://github.com/autonomousvision/gaussian-opacity-fields/blob/main/train.py
 def L1_loss_appearance(image, gt_image, gaussians, view_idx, return_transformed_image=False):
