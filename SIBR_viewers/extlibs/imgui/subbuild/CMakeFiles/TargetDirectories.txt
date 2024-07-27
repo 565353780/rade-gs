@@ -1,3 +1,0 @@
-/home/chli/github/ASDF/sibr-core/extlibs/imgui/subbuild/CMakeFiles/imgui-populate.dir
-/home/chli/github/ASDF/sibr-core/extlibs/imgui/subbuild/CMakeFiles/edit_cache.dir
-/home/chli/github/ASDF/sibr-core/extlibs/imgui/subbuild/CMakeFiles/rebuild_cache.dir
