@@ -1,29 +1,31 @@
 import os
-import sys
-import math
 import torch
+from random import randint
+import sys
+from scene import Scene, GaussianModel
+from argparse import ArgumentParser, Namespace
+from arguments import ModelParams, PipelineParams, OptimizationParams
+import matplotlib.pyplot as plt
+import math
 import numpy as np
+from scene.cameras import Camera
+from gaussian_renderer import render
 import open3d as o3d
 import open3d.core as o3c
-from tqdm import tqdm
-
-from scene import GaussianModel
-from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams
-from gaussian_renderer import render
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from utils.camera_utils import cameraList_from_camInfos
+from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
+import json
 
 
-def load_camera(args) -> list:
+def load_camera(args):
     if os.path.exists(os.path.join(args.source_path, "sparse")):
         scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
     elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
         print("Found transforms_train.json file, assuming Blender data set!")
         scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
-    else:
-        return []
     return cameraList_from_camInfos(scene_info.train_cameras, 1.0, args)
+
+
 
 
 def extract_mesh(dataset, pipe, checkpoint_iterations=None):
@@ -39,9 +41,9 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
 
     gaussians.load_ply(output_path)
     print(f'Loaded gaussians from {output_path}')
-
+    
     kernel_size = dataset.kernel_size
-
+    
     bg_color = [1, 1, 1]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     viewpoint_cam_list = load_camera(dataset)
@@ -72,7 +74,6 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
                                             block_resolution=16,
                                             block_count=50000,
                                             device=o3d_device)
-    pbar = tqdm(total=len(color_list))
     for color, depth, viewpoint_cam in zip(color_list, depth_list, viewpoint_cam_list):
         depth = o3d.t.geometry.Image(depth)
         depth = depth.to(o3d_device)
@@ -99,8 +100,6 @@ def extract_mesh(dataset, pipe, checkpoint_iterations=None):
                         1.0, 8.0
                     )
 
-        pbar.update()
-
     mesh = vbg.extract_triangle_mesh()
     mesh.compute_vertex_normals()
     o3d.io.write_triangle_mesh(os.path.join(dataset.model_path,"recon.ply"),mesh.to_legacy())
@@ -114,3 +113,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     with torch.no_grad():
         extract_mesh(lp.extract(args), pp.extract(args), args.checkpoint_iterations)
+        
+        
+    
+    

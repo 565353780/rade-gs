@@ -220,7 +220,7 @@ __global__ void computeCov2DCUDA(int P,
 
 	glm::mat3 Vrk_eigen_vector;
 	glm::vec3 Vrk_eigen_value;
-	int D = glm::findEigenvaluesSymReal(Vrk,Vrk_eigen_value,Vrk_eigen_vector);
+	int D = glm_modification::findEigenvaluesSymReal(Vrk,Vrk_eigen_value,Vrk_eigen_vector);
 
 	unsigned int min_id = Vrk_eigen_value[0]>Vrk_eigen_value[1]? (Vrk_eigen_value[1]>Vrk_eigen_value[2]?2:1):(Vrk_eigen_value[0]>Vrk_eigen_value[2]?2:0);
 
@@ -236,15 +236,7 @@ __global__ void computeCov2DCUDA(int P,
 	}
 	else
 	{
-		if(D<3)
-		{
-			const glm::vec3 eigenvector1 = Vrk_eigen_vector[(min_id+1)%3];
-			const glm::vec3 eigenvector2 = Vrk_eigen_vector[(min_id+2)%3];
-			eigenvector_min = glm::cross(eigenvector1, eigenvector2);
-		}
-		else{
-			eigenvector_min = Vrk_eigen_vector[min_id];
-		}
+		eigenvector_min = Vrk_eigen_vector[min_id];
 		Vrk_inv = glm::outerProduct(eigenvector_min,eigenvector_min);
 	}
 	
@@ -253,6 +245,7 @@ __global__ void computeCov2DCUDA(int P,
 	glm::vec3 uvh = {txtz, tytz, 1};
 	glm::vec3 uvh_m = cov_cam_inv * uvh;
 	glm::vec3 uvh_mn = glm::normalize(uvh_m);
+
 
 	float u2 = txtz * txtz;
 	float v2 = tytz * tytz;
@@ -266,9 +259,7 @@ __global__ void computeCov2DCUDA(int P,
 	float l;
 	float nl;
 	glm::mat3 dL_dnJ;
-	float lv, lv2, lv3;
-	float tmp;
-	if(isnan(uvh_mn.x))
+	if(isnan(uvh_mn.x)||D==0)
 	{
 		dL_dVrk = glm::mat3(0,0,0,0,0,0,0,0,0);
 		dL_dnJ = glm::mat3(0,0,0,0,0,0,0,0,0);
@@ -278,8 +269,6 @@ __global__ void computeCov2DCUDA(int P,
 		dL_du = 0;
 		dL_dv = 0;
 		dL_dl = 0;
-		lv =  lv2 = lv3 = 1;
-		tmp = 0;
 	}
 	else
 	{
@@ -310,19 +299,11 @@ __global__ void computeCov2DCUDA(int P,
 		glm::vec2 camera_plane2 = {(t.x+plane[0]*t.z)/nl, (t.y+plane[1]*t.z)/nl};
 
 		glm::vec2 ray_plane = {plane[0]*factor_normal, plane[1]*factor_normal};
-
 		glm::vec3 ray_normal_vector = {-plane[0]*factor_normal, -plane[1]*factor_normal, -1};
 
 		glm::vec3 cam_normal_vector = nJ * ray_normal_vector;
 		glm::vec3 normal_vector = glm::normalize(cam_normal_vector);
-		lv2 = (cam_normal_vector.x*cam_normal_vector.x+\
-				cam_normal_vector.y*cam_normal_vector.y+\
-				cam_normal_vector.z*cam_normal_vector.z);
-		lv = sqrt(lv2);
-		lv3 = lv2 * lv;
-		glm::mat3 eye3 = glm::mat3(1,0,0,
-									0,1,0,
-									0,0,1);
+		float lv = glm::length(cam_normal_vector);
 		const glm::vec3 dL_dnormal_lv = dL_dnormal/lv;
 		glm::vec3 dL_dcam_normal_vector = dL_dnormal_lv - normal_vector * glm::dot(normal_vector,dL_dnormal_lv);
 		glm::vec3 dL_dray_normal_vector = glm::transpose(nJ) * dL_dcam_normal_vector;
@@ -342,10 +323,10 @@ __global__ void computeCov2DCUDA(int P,
 						-dL_camera_plane1.x * camera_plane1.x - dL_camera_plane1.y * camera_plane1.y
 						-dL_camera_plane2.x * camera_plane2.x - dL_camera_plane2.y * camera_plane2.y
 						-dL_dray_normal_vector[0] * ray_normal_vector.x - dL_dray_normal_vector[1] * ray_normal_vector.y
-						-dL_dray_plane.x*ray_plane.x - dL_dray_plane.y*ray_plane.y) / nl;
+						-dL_dray_plane.x * ray_plane.x - dL_dray_plane.y * ray_plane.y) / nl;
 
 
-		tmp = dL_dplane.x * plane.x + dL_dplane.y * plane.y;
+		float tmp = dL_dplane.x * plane.x + dL_dplane.y * plane.y;
 
 		glm::vec3 W_uvh = W * uvh;
 
@@ -449,7 +430,6 @@ __global__ void computeCov2DCUDA(int P,
 	dL_dcov[6 * idx + 2] += dL_dVrk[0][2] + dL_dVrk[2][0];
 	dL_dcov[6 * idx + 4] += dL_dVrk[1][2] + dL_dVrk[2][1];
 
-
 	// Gradients of loss w.r.t. upper 2x3 portion of intermediate matrix T
 	// cov2D = transpose(T) * transpose(Vrk) * T;
 	float dL_dT00 = 2 * (T[0][0] * Vrk[0][0] + T[0][1] * Vrk[0][1] + T[0][2] * Vrk[0][2]) * dL_da +
@@ -476,18 +456,23 @@ __global__ void computeCov2DCUDA(int P,
 	float tz2 = tz * tz;
 	float tz3 = tz2 * tz;
 
+	// glm::mat3 nJ = glm::mat3(
+	// 		1 / t.z, 0.0f, -(t.x) / (t.z * t.z),
+	// 		0.0f, 1 / t.z, -(t.y) / (t.z * t.z),
+	// 		t.x/l, t.y/l, t.z/l);
+	float l3 = l * l * l;
 	float dL_dtx = x_grad_mul * (-h_x * tz2 * dL_dJ02 + dL_du * tz
-								-dL_dnJ[0][2]*tz2 + dL_dnJ[2][0]*(1/lv-t.x*t.x/lv3) + dL_dnJ[2][2]*(-t.x*t.z/lv3) //this line is from normal
+								-dL_dnJ[0][2]*tz2 + dL_dnJ[2][0]*(1/l-t.x*t.x/l3) + dL_dnJ[2][1]*(-t.x*t.y/l3) + dL_dnJ[2][2]*(-t.x*t.z/l3) //this line is from normal
 								+(dL_camera_plane0.x * plane[0] + dL_camera_plane0.y * plane[1] + dL_camera_plane2.x)/nl
 								+dL_dl*t.x/l);
 	float dL_dty = y_grad_mul * (-h_y * tz2 * dL_dJ12 + dL_dv * tz
-								-dL_dnJ[1][2]*tz2 + dL_dnJ[2][1]*(1/lv-t.y*t.y/lv3) + dL_dnJ[2][2]*(-t.y*t.z/lv3) //this line is from normal
+								-dL_dnJ[1][2]*tz2 + dL_dnJ[2][0]*(-t.x*t.y/l3) + dL_dnJ[2][1]*(1/l-t.y*t.y/l3) + dL_dnJ[2][2]*(-t.y*t.z/l3) //this line is from normal
 								+(dL_camera_plane1.x * plane[0] + dL_camera_plane1.y * plane[1] + dL_camera_plane2.y)/nl
 								+dL_dl*t.y/l);
 	float dL_dtz = -h_x * tz2 * dL_dJ00 - h_y * tz2 * dL_dJ11 + (2 * h_x * t.x) * tz3 * dL_dJ02 + (2 * h_y * t.y) * tz3 * dL_dJ12
-					- (dL_du * t.x + dL_dv * t.y) * tz2 + tmp * tz
-					+ dL_dnJ[0][0] * (-tz2) + dL_dnJ[1][1] * (-tz2) + dL_dnJ[0][2] * (2*t.x*tz3) + dL_dnJ[1][2] * (2*t.y*tz3) // two lines are from normal
-					+ (dL_dnJ[2][0]*t.x+dL_dnJ[2][1]*t.y)*(-t.z/lv3) + dL_dnJ[2][2]*(1/lv-t.z*t.z/lv3) // two lines are from normal
+					- (dL_du * t.x + dL_dv * t.y) * tz2
+					+ (dL_dnJ[0][0] + dL_dnJ[1][1]) * (-tz2) + dL_dnJ[0][2] * (2*t.x*tz3) + dL_dnJ[1][2] * (2*t.y*tz3) // two lines are from normal
+					+ (dL_dnJ[2][0]*t.x+dL_dnJ[2][1]*t.y)*(-t.z/l3) + dL_dnJ[2][2]*(1/l-t.z*t.z/l3) // two lines are from normal
 					+ (dL_camera_plane0.x * (-(v2 + 1)) + dL_camera_plane0.y * uv + dL_camera_plane1.x * uv + dL_camera_plane1.y * (-(u2+1)) + dL_camera_plane2.x * plane[0] + dL_camera_plane2.y * plane[1])/nl
 					+ dL_dl*t.z/l;
 
@@ -617,24 +602,16 @@ __global__ void preprocessCUDA(
 	// the w must be equal to 1 for view^T * [x,y,z,1]
 	float3 m_view = transformPoint4x3(m, view);
 
-	// Compute loss gradient w.r.t. 3D means due to gradients of depth
-	// from rendering procedure
-	// glm::vec3 dL_dmean2;
-	// float mul3 = view[2] * m.x + view[6] * m.y + view[10] * m.z + view[14];
-	// dL_dmean2.x = (view[2] - view[3] * mul3) * dL_ddepth[idx];
-	// dL_dmean2.y = (view[6] - view[7] * mul3) * dL_ddepth[idx];
-	// dL_dmean2.z = (view[10] - view[11] * mul3) * dL_ddepth[idx];
 	float t = sqrt(m_view.x*m_view.x+m_view.y*m_view.y+m_view.z*m_view.z);
 	float dL_dt = dL_dts[idx];
 
 	float3 dL_dview_point = dL_dview_points[idx];
-	// float3 dL_dmean3 = transformVec4x3Transpose(dL_dview_point, view);
+
 	float3 dL_dmean2 = transformVec4x3Transpose({dL_dview_point.x+m_view.x/t*dL_dt,
 												dL_dview_point.y+m_view.y/t*dL_dt,
 												dL_dview_point.z+m_view.z/t*dL_dt}, view);
 
 	// That's the third part of the mean gradient.
-	// dL_dmeans[idx] += dL_dmean1 + dL_dmean2 + {dL_dmean3.x, dL_dmean3.y, dL_dmean3.z};
 	dL_dmeans[idx] += glm::vec3(
 		dL_dmean1.x + dL_dmean2.x,
 		dL_dmean1.y + dL_dmean2.y,
@@ -651,7 +628,7 @@ __global__ void preprocessCUDA(
 }
 
 // Backward version of the rendering procedure.
-template <uint32_t C, bool GEO = true, bool DEPTH = true>
+template <uint32_t C, bool COORD = true, bool DEPTH = true, bool NORMAL = true>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
@@ -668,8 +645,6 @@ renderCUDA(
 	const float2* __restrict__ ray_planes,
 	const float* __restrict__ alphas,
 	const float3* __restrict__ normals,
-	const float* __restrict__ wd_map,
-	const float* __restrict__ wd2_map,
 	const float* __restrict__ accum_coord,
 	const float* __restrict__ accum_depth,
 	const float* __restrict__ normal_length,
@@ -681,7 +656,6 @@ renderCUDA(
 	const float* __restrict__ dL_dpixel_mdepths,
 	const float* __restrict__ dL_dalphas,
 	const float* __restrict__ dL_dpixel_normals,
-	const float* __restrict__ dL_ddistortions,
 	const float* __restrict__ normalmap,
 	const float focal_x, 
 	const float focal_y,
@@ -707,6 +681,8 @@ renderCUDA(
 	const float2 pixnf = {(pixf.x-W/2.f)/focal_x,(pixf.y-H/2.f)/focal_y};
 	const float ln = sqrt(pixnf.x*pixnf.x+pixnf.y*pixnf.y+1);
 
+	constexpr bool GEO = COORD || DEPTH || NORMAL;
+
 	const bool inside = pix.x < W&& pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 
@@ -729,13 +705,10 @@ renderCUDA(
 	// product of all (1 - alpha) factors. 
 	const float T_final = inside ? (1 - alphas[pix_id]) : 0;
 	const float w_final = inside ? alphas[pix_id] : 0;
-	const float wd_final = inside ? wd_map[pix_id] : 0;
-	const float wd2_final = inside ? wd2_map[pix_id] : 0;
+
 	
 	float T = T_final;
 	float w = w_final;
-	float wd = wd_final;
-	float wd2 = wd2_final;
 
 	// We start from the back. The ID of the last contributing
 	// Gaussian is known from each pixel from the forward.
@@ -755,45 +728,30 @@ renderCUDA(
 	float accum_normal_rec[3] = {0};
 	float dL_dpixel_normal[3];
 	float dL_dpixel_mcoord[3];
-	float accum_w = 0;
-	float accum_wd = 0;
-	float accum_wd2 = 0;
 	
 	if (inside) {
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 		dL_dalpha = dL_dalphas[pix_id];
+
 		if constexpr (GEO)
 		{
-			float dL_dpixel_coord_w[3] = {dL_dpixel_coords[pix_id],
+			float ww = w_final*w_final;
+			if constexpr (COORD)
+			{
+				float dL_dpixel_coord_w[3] = {dL_dpixel_coords[pix_id],
 											dL_dpixel_coords[H * W + pix_id],
 											dL_dpixel_coords[2 * H * W + pix_id]};
-			float pixel_accum_coord[3] = {accum_coord[pix_id],
-											accum_coord[H * W + pix_id],
-											accum_coord[2 * H * W + pix_id]};
-			float ww = w_final*w_final;
-			// dL_dalpha = dL_dalphas[pix_id] -  dL_dpixel_coord_w*accum_coord[pix_id]/ww;
-			for(int i = 0; i < 3; i++)
-			{
-				dL_dalpha -= dL_dpixel_coord_w[i]*pixel_accum_coord[i]/ww;
-				dL_dpixel_coord[i] = dL_dpixel_coord_w[i] / w_final;
-				dL_dpixel_mcoord[i] = dL_dpixel_mcoords[i * H * W + pix_id];
+				float pixel_accum_coord[3] = {accum_coord[pix_id],
+												accum_coord[H * W + pix_id],
+												accum_coord[2 * H * W + pix_id]};
+				for(int i = 0; i < 3; i++)
+				{
+					dL_dalpha -= dL_dpixel_coord_w[i]*pixel_accum_coord[i]/ww;
+					dL_dpixel_coord[i] = dL_dpixel_coord_w[i] / w_final;
+					dL_dpixel_mcoord[i] = dL_dpixel_mcoords[i * H * W + pix_id];
+				}
 			}
-
-			glm::vec3 dL_dpixel_normaln = glm::vec3(dL_dpixel_normals[pix_id],
-													dL_dpixel_normals[H * W + pix_id],
-													dL_dpixel_normals[2 * H * W + pix_id]);
-			glm::vec3 normaln = glm::vec3(normalmap[pix_id],
-											normalmap[H * W + pix_id],
-											normalmap[2 * H * W + pix_id]);
-			float normal_len = normal_length[pix_id];
-			glm::vec3 dL;
-			if(normal_len<NORMALIZE_EPS)
-				dL = dL_dpixel_normaln/NORMALIZE_EPS;
-			else
-				dL = (dL_dpixel_normaln - glm::dot(dL_dpixel_normaln,normaln)*normaln)/normal_len;
-			for (int i = 0; i < 3; i++)
-				dL_dpixel_normal[i] = dL[i];
 			if constexpr (DEPTH)
 			{
 				float dL_dpixel_depth_w = dL_dpixel_depths[pix_id];
@@ -801,6 +759,23 @@ renderCUDA(
 				dL_dalpha -= dL_dpixel_depth_w*pixel_accum_depth/ww;
 				dL_dpixel_t = dL_dpixel_depth_w / w_final/ ln;
 				dL_dpixel_mt = dL_dpixel_mdepths[pix_id] / ln;
+			}
+			if constexpr (NORMAL)
+			{
+				glm::vec3 dL_dpixel_normaln = glm::vec3(dL_dpixel_normals[pix_id],
+														dL_dpixel_normals[H * W + pix_id],
+														dL_dpixel_normals[2 * H * W + pix_id]);
+				glm::vec3 normaln = glm::vec3(normalmap[pix_id],
+												normalmap[H * W + pix_id],
+												normalmap[2 * H * W + pix_id]);
+				float normal_len = normal_length[pix_id];
+				glm::vec3 dL;
+				if(normal_len<NORMALIZE_EPS)
+					dL = dL_dpixel_normaln/NORMALIZE_EPS;
+				else
+					dL = (dL_dpixel_normaln - glm::dot(dL_dpixel_normaln,normaln)*normaln)/normal_len;
+				for (int i = 0; i < 3; i++)
+					dL_dpixel_normal[i] = dL[i];
 			}
 		}
 	}
@@ -832,21 +807,24 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-			if constexpr (GEO)
+			if constexpr (COORD)
 			{
 				for(int ch = 0; ch < 6; ch++)
 					collected_camera_planes[ch * BLOCK_SIZE + block.thread_rank()] = camera_planes[coll_id * 6 + ch];
 				for(int ch = 0; ch < 3; ch++)
 					collected_mean3d[ch * BLOCK_SIZE + block.thread_rank()] = view_points[coll_id * 3 + ch];
+			}
+			if constexpr (DEPTH)
+			{
+				collected_ray_planes[block.thread_rank()] = ray_planes[coll_id];
+				collected_ts[block.thread_rank()] = ts[coll_id];
+			}
+			if constexpr (NORMAL)
+			{
 				float3 normal = normals[coll_id];
 				collected_normals[0 * BLOCK_SIZE + block.thread_rank()] = normal.x;
 				collected_normals[1 * BLOCK_SIZE + block.thread_rank()] = normal.y;
 				collected_normals[2 * BLOCK_SIZE + block.thread_rank()] = normal.z;
-				if constexpr (DEPTH)
-				{
-					collected_ray_planes[block.thread_rank()] = ray_planes[coll_id];
-					collected_ts[block.thread_rank()] = ts[coll_id];
-				}
 			}
 		}
 		block.sync();
@@ -906,7 +884,7 @@ renderCUDA(
 			float2 camera_plane1;
 			float2 camera_plane2;
 			float2 ray_plane;
-			if constexpr (GEO)
+			if constexpr (COORD)
 			{
 				camera_plane0 = {collected_camera_planes[j], collected_camera_planes[j + BLOCK_SIZE]};
 				camera_plane1 = {collected_camera_planes[j + BLOCK_SIZE * 2], collected_camera_planes[j + BLOCK_SIZE * 3]};
@@ -914,21 +892,7 @@ renderCUDA(
 				float coord[3] = {collected_mean3d[j] + camera_plane0.x * d.x + camera_plane0.y * d.y,
 									collected_mean3d[j + BLOCK_SIZE] + camera_plane1.x * d.x + camera_plane1.y * d.y,
 									collected_mean3d[j + BLOCK_SIZE * 2] + camera_plane2.x * d.x + camera_plane2.y * d.y};
-				for (int ch = 0; ch < 3; ch++)
-				{
-					const float c = collected_normals[ch * BLOCK_SIZE + j];
-					// Update last color (to be used in the next iteration)
-					accum_normal_rec[ch] = last_alpha * last_normal[ch] + (1.f - last_alpha) * accum_normal_rec[ch];
-					last_normal[ch] = c;
 
-					const float dL_dchannel = dL_dpixel_normal[ch];
-					dL_dopa += (c - accum_normal_rec[ch]) * dL_dchannel;
-					// Update the gradients w.r.t. normal of the Gaussian. 
-					// Atomic, since this pixel is just one of potentially
-					// many that were affected by this Gaussian.
-					atomicAdd(&(dL_dnormals[global_id * 3 + ch]), dchannel_dcolor * dL_dchannel);
-				}
-				
 				for (int ch = 0; ch < 3; ch++)
 				{
 					const float c = coord[ch];
@@ -946,7 +910,6 @@ renderCUDA(
 						dL_dcoords[ch] += dL_dpixel_mcoord[ch];
 					}
 				}
-				
 
 				atomicAdd(&(dL_dmean3D[global_id].x), dL_dcoords[0]);
 				atomicAdd(&(dL_dmean3D[global_id].y), dL_dcoords[1]);
@@ -957,26 +920,44 @@ renderCUDA(
 				atomicAdd(&dL_dcamera_planes[global_id*6+3], dL_dcoords[1] * d.y / focal_y);
 				atomicAdd(&dL_dcamera_planes[global_id*6+4], dL_dcoords[2] * d.x / focal_x);
 				atomicAdd(&dL_dcamera_planes[global_id*6+5], dL_dcoords[2] * d.y / focal_y);
-
-				if constexpr (DEPTH)
-				{
-					const float t_center = collected_ts[j];
-					ray_plane = collected_ray_planes[j];
-					float t = t_center + (ray_plane.x * d.x + ray_plane.y * d.y);
-					accum_t_rec = last_alpha * last_t + (1.f - last_alpha) * accum_t_rec;
-					last_t = t;
-					dL_dopa += (t - accum_t_rec) * dL_dpixel_t;
-					dL_dt = dpixel_t_dt * dL_dpixel_t;
-					if (contributor == max_contributor-1) {
-						dL_dt += dL_dpixel_mt;
-					}
-					
-					atomicAdd(&(dL_dts[global_id]), dL_dt);
-					atomicAdd(&dL_dray_planes[global_id].x, dL_dt * d.x / focal_x);
-					atomicAdd(&dL_dray_planes[global_id].y, dL_dt * d.y / focal_y);
-				}
-
 			}
+
+			if constexpr (DEPTH)
+			{
+				const float t_center = collected_ts[j];
+				ray_plane = collected_ray_planes[j];
+				float t = t_center + (ray_plane.x * d.x + ray_plane.y * d.y);
+				accum_t_rec = last_alpha * last_t + (1.f - last_alpha) * accum_t_rec;
+				last_t = t;
+				dL_dopa += (t - accum_t_rec) * dL_dpixel_t;
+				dL_dt = dpixel_t_dt * dL_dpixel_t;
+				if (contributor == max_contributor-1) {
+					dL_dt += dL_dpixel_mt;
+				}
+				
+				atomicAdd(&(dL_dts[global_id]), dL_dt);
+				atomicAdd(&dL_dray_planes[global_id].x, dL_dt * d.x / focal_x);
+				atomicAdd(&dL_dray_planes[global_id].y, dL_dt * d.y / focal_y);
+			}
+
+			if constexpr (NORMAL)
+			{
+				for (int ch = 0; ch < 3; ch++)
+				{
+					const float c = collected_normals[ch * BLOCK_SIZE + j];
+					// Update last color (to be used in the next iteration)
+					accum_normal_rec[ch] = last_alpha * last_normal[ch] + (1.f - last_alpha) * accum_normal_rec[ch];
+					last_normal[ch] = c;
+
+					const float dL_dchannel = dL_dpixel_normal[ch];
+					dL_dopa += (c - accum_normal_rec[ch]) * dL_dchannel;
+					// Update the gradients w.r.t. normal of the Gaussian. 
+					// Atomic, since this pixel is just one of potentially
+					// many that were affected by this Gaussian.
+					atomicAdd(&(dL_dnormals[global_id * 3 + ch]), dchannel_dcolor * dL_dchannel);
+				}
+			}
+
 			// Propagate gradients from pixel alpha (weights_sum) to opacity
 			accum_alpha_rec = last_alpha + (1.f - last_alpha) * accum_alpha_rec;
 			dL_dopa += (1 - accum_alpha_rec) * dL_dalpha;
@@ -1004,7 +985,7 @@ renderCUDA(
 			// Update gradients w.r.t. 2D mean position of the Gaussian
 			float dL_ddelx = dL_dG * dG_ddelx;
 			float dL_ddely = dL_dG * dG_ddely;
-			if constexpr (GEO)
+			if constexpr (COORD)
 			{
 				dL_ddelx += dL_dcoords[0] * camera_plane0.x
 							+ dL_dcoords[1] * camera_plane1.x
@@ -1012,11 +993,11 @@ renderCUDA(
 				dL_ddely += dL_dcoords[0] * camera_plane0.y
 							+ dL_dcoords[1] * camera_plane1.y
 							+ dL_dcoords[2] * camera_plane2.y;
-				if constexpr (DEPTH)
-				{
-					dL_ddelx += dL_dt * ray_plane.x;
-					dL_ddely += dL_dt * ray_plane.y;
-				}
+			}
+			if constexpr (DEPTH)
+			{
+				dL_ddelx += dL_dt * ray_plane.x;
+				dL_ddely += dL_dt * ray_plane.y;
 			}
 			atomicAdd(&dL_dmean2D[global_id].x, dL_ddelx * ddelx_dx);
 			atomicAdd(&dL_dmean2D[global_id].y, dL_ddely * ddely_dy);
@@ -1133,8 +1114,6 @@ void BACKWARD::render(
 	const float2* ray_planes,
 	const float* alphas,
 	const float3* normals,
-	const float* wd_map,
-	const float* wd2_map,
 	const float* accum_coord,
 	const float* accum_depth,
 	const float* normal_length,
@@ -1146,7 +1125,6 @@ void BACKWARD::render(
 	const float* dL_dpixel_mdepth,
 	const float* dL_dalphas,
 	const float* dL_dpixel_normals,
-	const float* dL_ddistortions,
 	const float* normalmap,
 	const float focal_x, 
 	const float focal_y,
@@ -1159,25 +1137,27 @@ void BACKWARD::render(
 	float* dL_dcamera_planes,
 	float2* dL_dray_planes,
 	float* dL_dnormals,
-	bool geo,
-	bool depth)
+	bool require_coord,
+	bool require_depth)
 {
-#define RENDER_CUDA_CALL(template_geo, template_depth) \
-    renderCUDA<NUM_CHANNELS, template_geo, template_depth> <<<grid, block>>> ( \
+#define RENDER_CUDA_CALL(template_coord, template_depth, template_normal) \
+    renderCUDA<NUM_CHANNELS, template_coord, template_depth, template_normal> <<<grid, block>>> ( \
         ranges, point_list, W, H, bg_color, view_points, means2D, conic_opacity, colors, \
-        depths, ts, camera_planes, ray_planes, alphas, normals, wd_map, wd2_map, \
+        depths, ts, camera_planes, ray_planes, alphas, normals, \
 		accum_coord, accum_depth, normal_length, \
         n_contrib, dL_dpixels, dL_dpixel_coords, dL_dpixel_mcoords, dL_dpixel_depth, \
-        dL_dpixel_mdepth, dL_dalphas, dL_dpixel_normals, dL_ddistortions, normalmap, \
+        dL_dpixel_mdepth, dL_dalphas, dL_dpixel_normals, normalmap, \
         focal_x, focal_y, dL_dmean3D, dL_dmean2D, dL_dconic2D, dL_dopacity, dL_dcolors, \
         dL_dts, dL_dcamera_planes, dL_dray_planes, dL_dnormals)
 
-	if (geo && depth)
-		RENDER_CUDA_CALL(true, true);
-	else if (geo && !depth)
-		RENDER_CUDA_CALL(true, false);
+	if (require_coord && require_depth)
+		RENDER_CUDA_CALL(true, true, true);
+	else if (require_coord && !require_depth)
+		RENDER_CUDA_CALL(true, false, true);
+	else if(!require_coord && require_depth)
+		RENDER_CUDA_CALL(false, true, true);
 	else
-		RENDER_CUDA_CALL(false, false);
+		RENDER_CUDA_CALL(false, false, false);
 
 #undef RENDER_CUDA_CALL
 }
