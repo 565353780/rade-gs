@@ -23,15 +23,10 @@ from utils.image_utils import psnr
 from utils.graphics_utils import point_double_to_normal, depth_double_to_normal
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
-try:
-    from torch.utils.tensorboard import SummaryWriter
-    TENSORBOARD_FOUND = True
-except ImportError:
-    TENSORBOARD_FOUND = False
+from torch.utils.tensorboard import SummaryWriter
 
 from scene.cameras import Camera
-import matplotlib.pyplot as plt
-from utils.vis_utils import apply_depth_colormap
+
 
 # function L1_loss_appearance is fork from GOF https://github.com/autonomousvision/gaussian-opacity-fields/blob/main/train.py
 def L1_loss_appearance(image, gt_image, gaussians, view_idx, return_transformed_image=False):
@@ -229,10 +224,7 @@ def prepare_output_and_logger(args):
 
     # Create Tensorboard writer
     tb_writer = None
-    if TENSORBOARD_FOUND:
-        tb_writer = SummaryWriter(args.model_path)
-    else:
-        print("Tensorboard not available: not logging progress")
+    tb_writer = SummaryWriter(args.model_path)
     return tb_writer
 
 def training_report(tb_writer, iteration, Ll1, loss, normal_loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
